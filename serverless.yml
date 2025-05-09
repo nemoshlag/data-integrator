@@ -1,0 +1,191 @@
+service: hospital-data-integrator
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: eu-west-1
+  stage: ${opt:stage, 'dev'}
+  environment:
+    STAGE: ${opt:stage, 'dev'}
+    POWERTOOLS_SERVICE_NAME: ${self:service}
+    POWERTOOLS_METRICS_NAMESPACE: ${self:service}
+    LOG_LEVEL: INFO
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource: 
+            - "arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:custom.tableName}-*"
+            - "arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:custom.tableName}-*/index/*"
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+          Resource: "arn:aws:s3:::${self:custom.buckets.pms}/*"
+
+custom:
+  tableName: ${self:service}-${opt:stage, self:provider.stage}
+  buckets:
+    pms: external-take-home-test-wild-launch
+  pythonRequirements:
+    dockerizePip: true
+    layer:
+      name: python-deps
+      description: Python dependencies
+    noDeploy:
+      - coverage
+      - pytest
+      - black
+      - isort
+      - mypy
+
+package:
+  individually: true
+  patterns:
+    - '!venv/**'
+    - '!.pytest_cache/**'
+    - '!__pycache__/**'
+    - '!tests/**'
+    - '!*.pyc'
+
+functions:
+  processS3Upload:
+    handler: src.functions.process_s3_upload.handler.handle
+    events:
+      - s3:
+          bucket: ${self:custom.buckets.pms}
+          event: s3:ObjectCreated:*
+          existing: true
+    environment:
+      PATIENTS_TABLE: ${self:custom.tableName}-patients
+      ADMISSIONS_TABLE: ${self:custom.tableName}-admissions
+      TESTS_TABLE: ${self:custom.tableName}-tests
+
+  monitorPatients:
+    handler: src.functions.monitor_patients.handler.handle
+    events:
+      - schedule: rate(1 minute)
+    environment:
+      ADMISSIONS_TABLE: ${self:custom.tableName}-admissions
+
+  getPatientsWithoutTests:
+    handler: src.functions.api.get_patients.handle
+    events:
+      - http:
+          path: /patients/monitoring
+          method: get
+          cors: true
+    environment:
+      ADMISSIONS_TABLE: ${self:custom.tableName}-admissions
+
+  healthCheck:
+    handler: src.functions.api.health.handle
+    events:
+      - http:
+          path: /health
+          method: get
+          cors: true
+    environment:
+      PATIENTS_TABLE: ${self:custom.tableName}-patients
+      ADMISSIONS_TABLE: ${self:custom.tableName}-admissions
+      TESTS_TABLE: ${self:custom.tableName}-tests
+
+  websocketConnect:
+    handler: src.functions.websocket.connect.handle
+    events:
+      - websocket:
+          route: $connect
+
+  websocketDisconnect:
+    handler: src.functions.websocket.disconnect.handle
+    events:
+      - websocket:
+          route: $disconnect
+
+resources:
+  Resources:
+    PatientsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}-patients
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+
+    AdmissionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}-admissions
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+          - AttributeName: hoursSinceTest
+            AttributeType: N
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: MonitoringIndex
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: hoursSinceTest
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    TestsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}-tests
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          - AttributeName: patientId
+            AttributeType: S
+          - AttributeName: testDate
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: PatientTestIndex
+            KeySchema:
+              - AttributeName: patientId
+                KeyType: HASH
+              - AttributeName: testDate
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+plugins:
+  - serverless-python-requirements
+  - serverless-offline

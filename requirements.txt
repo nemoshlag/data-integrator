@@ -1,0 +1,16 @@
+# AWS
+boto3>=1.26.137
+aws-lambda-powertools>=2.15.0
+
+# Data processing
+pydantic>=1.10.7
+python-dateutil>=2.8.2
+pandas>=2.0.1
+
+# Utilities
+requests>=2.31.0
+python-jose>=3.3.0
+websockets>=11.0.3
+
+# Error handling and logging
+structlog>=23.1.0
