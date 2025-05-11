@@ -32,6 +32,8 @@ cd data-integrator
 docker-compose up --build
 ```
 
+Note that for the first run backend service might fail, please rerun if so.
+
 - Backend: [http://localhost:8000/patients](http://localhost:8000/patients)
 - Frontend: [http://localhost:3000](http://localhost:3000)
 
